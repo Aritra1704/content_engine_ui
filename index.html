@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>eCardFactory Workflow Console</title>
+    <link rel="stylesheet" href="/assets/console.css" />
+  </head>
+  <body>
+    <div id="boot-fallback" class="boot-fallback">
+      <div class="console-layout">
+        <aside class="console-sidebar">
+          <p class="brand-overline">eCardFactory</p>
+          <h1 class="brand-title">Internal Console</h1>
+          <p class="brand-subtitle">Workflow-first operations panel</p>
+          <nav class="sidebar-nav" aria-label="Primary">
+            <a class="nav-link active" href="/">Workflow Console</a>
+            <a class="nav-link" href="/compare">Compare Lab</a>
+          </nav>
+        </aside>
+        <main class="console-main">
+          <header class="page-head">
+            <div>
+              <p class="page-kicker">Workflow</p>
+              <h1 class="page-title">eCardFactory</h1>
+              <p class="page-description">Console is starting. If this remains visible, frontend scripts failed to load.</p>
+            </div>
+          </header>
+          <section class="section-panel">
+            <div class="section-head">
+              <div>
+                <h2 class="section-title">Frontend Boot Status</h2>
+                <p class="section-copy" id="boot-fallback-message">Loading React console assets...</p>
+              </div>
+            </div>
+            <div class="empty-state">
+              If this persists, check browser console for local bundle/runtime errors.
+            </div>
+          </section>
+        </main>
+      </div>
+    </div>
+    <div id="root"></div>
+    <script src="/config.js"></script>
+    <script src="/assets/app.js" defer></script>
+  </body>
+</html>

@@ -1,0 +1,12 @@
+{
+  "name": "content_engine_ui",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Standalone UI shell for the eCardFactory workflow console",
+  "scripts": {
+    "dev": "node scripts/dev.mjs",
+    "build": "node scripts/build.mjs",
+    "build:legacy-fallback": "node scripts/build-legacy-fallback.mjs"
+  }
+}

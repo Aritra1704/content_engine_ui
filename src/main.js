@@ -407,6 +407,18 @@ const compareLabUrl = resolveAssetUrl("/static/compare.html");
     return { imageOptionUsed: true };
   }
 
+  function openCreatedJobInStudio(jobId, navigate) {
+    const nextJobId = String(jobId || "").trim();
+    if (!nextJobId) {
+      throw new Error("Created job response did not include a job_id");
+    }
+    navigate(`/studio/${nextJobId}`);
+    void autoBuildStudioJob(nextJobId).catch((autoBuildError) => {
+      console.error(`Auto-build failed for ${nextJobId}`, autoBuildError);
+    });
+    return nextJobId;
+  }
+
   function splitCsv(value) {
     return String(value || "")
       .split(",")
@@ -938,14 +950,7 @@ const compareLabUrl = resolveAssetUrl("/static/compare.html");
           body: JSON.stringify(payload),
         });
         setCreateOpen(false);
-        try {
-          await autoBuildStudioJob(created.job_id);
-          setStatusMessage(`Created ${created.job_id} and built initial card options`);
-        } catch (autoBuildError) {
-          setStatusMessage(`Created ${created.job_id}. Studio follow-up is needed: ${autoBuildError.message || "auto-build failed"}`);
-        }
-        await loadDashboard();
-        navigate(`/studio/${created.job_id}`);
+        openCreatedJobInStudio(created.job_id, navigate);
       } catch (requestError) {
         setJobsError(requestError.message || "Unable to create new job");
       } finally {
@@ -1015,22 +1020,7 @@ const compareLabUrl = resolveAssetUrl("/static/compare.html");
               body: JSON.stringify(basePayload),
             });
         setThemeRunOpen(false);
-        try {
-          await autoBuildStudioJob(created.job_id);
-          setStatusMessage(
-            themeRunMode === "manual"
-              ? `Created ${created.job_id} from ${themeRunValues.theme_key} and built initial card options`
-              : `Created ${created.job_id} from today's theme and built initial card options`,
-          );
-        } catch (autoBuildError) {
-          setStatusMessage(
-            themeRunMode === "manual"
-              ? `Created ${created.job_id} from ${themeRunValues.theme_key}. Studio follow-up is needed: ${autoBuildError.message || "auto-build failed"}`
-              : `Created ${created.job_id} from today's theme. Studio follow-up is needed: ${autoBuildError.message || "auto-build failed"}`,
-          );
-        }
-        await loadDashboard();
-        navigate(`/studio/${created.job_id}`);
+        openCreatedJobInStudio(created.job_id, navigate);
       } catch (requestError) {
         setThemeError(
           requestError.message || (themeRunMode === "manual" ? "Unable to create theme job" : "Unable to create today's themed job"),
@@ -2628,13 +2618,7 @@ const compareLabUrl = resolveAssetUrl("/static/compare.html");
           body: JSON.stringify(buildThemeRunPayload(todayThemeRunForm)),
         });
         setTodayThemeRunOpen(false);
-        try {
-          await autoBuildStudioJob(created.job_id);
-          setStatusMessage(`Created ${created.job_id} from today's theme and opened Studio`);
-        } catch (autoBuildError) {
-          setStatusMessage(`Created ${created.job_id} from today's theme. Studio follow-up is needed: ${autoBuildError.message || "auto-build failed"}`);
-        }
-        navigate(`/studio/${created.job_id}`);
+        openCreatedJobInStudio(created.job_id, navigate);
       } catch (requestError) {
         setError(requestError.message || "Unable to create today's themed job");
       } finally {

@@ -26012,26 +26012,12 @@
     const payload = await requestJSON(`/api/jobs/${jobId}/image-assets`);
     return payload && typeof payload === "object" ? payload : { candidates: [] };
   }
-  async function autoBuildStudioJob(jobId) {
-    await requestJSON(`/api/jobs/${jobId}/approve-content`, { method: "POST" });
-    const imageAssets = await requestJSON(`/api/jobs/${jobId}/image-assets/generate`, { method: "POST" });
-    const firstImageOption = Array.isArray(imageAssets?.candidates) ? imageAssets.candidates[0] : null;
-    if (!firstImageOption?.candidate_id) {
-      throw new Error("ImageForge returned no image candidates");
-    }
-    await requestJSON(`/api/jobs/${jobId}/image-assets/${firstImageOption.candidate_id}/select`, { method: "POST" });
-    await requestJSON(`/api/jobs/${jobId}/render-final`, { method: "POST" });
-    return { imageOptionUsed: true };
-  }
   function openCreatedJobInStudio(jobId, navigate) {
     const nextJobId = String(jobId || "").trim();
     if (!nextJobId) {
       throw new Error("Created job response did not include a job_id");
     }
     navigate(`/studio/${nextJobId}`);
-    void autoBuildStudioJob(nextJobId).catch((autoBuildError) => {
-      console.error(`Auto-build failed for ${nextJobId}`, autoBuildError);
-    });
     return nextJobId;
   }
   function splitCsv(value) {
@@ -28607,13 +28593,18 @@
           setImageAssets(null);
           return;
         }
-        const [jobPayload, assetPayload, candidatePayload, shortlistPayload, imageAssetPayload] = await Promise.all([
+        const [jobPayload, assetPayload, candidatePayload, shortlistPayload] = await Promise.all([
           requestJSON(`/api/jobs/${jobId}`),
           requestJSON(`/api/jobs/${jobId}/assets`),
           requestJSON(`/api/jobs/${jobId}/candidates`),
-          requestJSON(`/api/jobs/${jobId}/shortlist`),
-          fetchJobImageAssets(jobId)
+          requestJSON(`/api/jobs/${jobId}/shortlist`)
         ]);
+        let imageAssetPayload = { candidates: [] };
+        try {
+          imageAssetPayload = await fetchJobImageAssets(jobId);
+        } catch (imageAssetError) {
+          console.warn(`Unable to load image assets for ${jobId}`, imageAssetError);
+        }
         setJob(jobPayload || null);
         setAssets(Array.isArray(assetPayload) ? assetPayload : []);
         setCandidates(Array.isArray(candidatePayload) ? candidatePayload : []);
@@ -28713,7 +28704,9 @@
           <div className="section-head">
             <div>
               <h2 className="section-title">Text Options</h2>
-              <p className="section-copy">Choose from the filtered shortlist only. Studio removes incomplete and duplicate text before it gets here.</p>
+              <p className="section-copy">
+                ${shortlistOptions.length} shortlisted from ${candidates.length} persisted candidates. Choose text manually; nothing is auto-selected in the canonical flow.
+              </p>
             </div>
             <div className="inline-actions">
               <button
@@ -28758,11 +28751,17 @@
                           </span>
                         </div>
                         <p className="studio-option-text">${candidate.text}</p>
+                        ${candidate.reason ? html`<p className="section-copy">${candidate.reason}</p>` : null}
                         <div className="studio-meta-row">
                           <span className="mini-pill">candidate ${candidate.candidate_id}</span>
                           <span className="mini-pill">${candidate.model}</span>
                           <span className="mini-pill">${candidate.backend}</span>
                         </div>
+                        ${Array.isArray(candidate.reason_codes) && candidate.reason_codes.length > 0 ? html`
+                              <div className="studio-meta-row">
+                                ${candidate.reason_codes.map((code) => html`<span key=${code} className="mini-pill">${code}</span>`)}
+                              </div>
+                            ` : null}
                         <div className="inline-actions">
                           <button
                             type="button"

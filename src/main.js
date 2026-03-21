@@ -65,6 +65,39 @@ const compareLabUrl = resolveAssetUrl("/static/compare.html");
     return String(job?.status || "unknown");
   }
 
+  function getProcessingState(job) {
+    return String(job?.processing_state || "idle").trim().toLowerCase();
+  }
+
+  function getProcessingTask(job) {
+    return String(job?.processing_task || "none").trim().toLowerCase();
+  }
+
+  function getProcessingMessage(job) {
+    const explicitMessage = String(job?.processing_message || "").trim();
+    if (explicitMessage) {
+      return explicitMessage;
+    }
+    const processingState = getProcessingState(job);
+    const processingTask = getProcessingTask(job);
+    if (processingTask === "content_generation" && processingState === "queued") {
+      return "Content creation queued";
+    }
+    if (processingTask === "content_generation" && processingState === "running") {
+      return "Content creation in progress";
+    }
+    if (processingTask === "content_generation" && processingState === "failed") {
+      return "Content creation failed";
+    }
+    return "";
+  }
+
+  function isContentGenerationActive(job) {
+    const processingState = getProcessingState(job);
+    return getProcessingTask(job) === "content_generation"
+      && (processingState === "queued" || processingState === "running");
+  }
+
   function statusTone(statusValue) {
     const status = String(statusValue || "").toLowerCase();
     if (status === "completed" || status === "approved" || status === "final_card_ready") {
@@ -653,17 +686,30 @@ const compareLabUrl = resolveAssetUrl("/static/compare.html");
 
   function collectImageAssetCandidates(imageAssets) {
     const candidates = Array.isArray(imageAssets?.candidates) ? imageAssets.candidates : [];
+    const recommendedCandidateId = String(imageAssets?.recommended_candidate_id || "");
     return candidates
       .map((candidate, index) => ({
         key: candidate.candidate_id || candidate.public_url || `image_candidate_${index}`,
+        rank: Number(candidate.rank || index + 1),
         candidate_id: String(candidate.candidate_id || ""),
+        imageforge_request_id: String(candidate.imageforge_request_id || imageAssets?.imageforge_request_id || ""),
+        provider_run_id: String(candidate.provider_run_id || ""),
         provider: String(candidate.provider || "unknown"),
         model: String(candidate.model || "").trim(),
         candidate_index: Number(candidate.candidate_index || index + 1),
         url: resolveAssetUrl(candidate.public_url || ""),
         relative_path: candidate.relative_path || "",
+        prompt_used: String(candidate.prompt_used || "").trim(),
+        negative_prompt_used: String(candidate.negative_prompt_used || "").trim(),
         width: candidate.width ?? null,
         height: candidate.height ?? null,
+        quality_score: candidate.quality_score ?? null,
+        relevance_score: candidate.relevance_score ?? null,
+        reason_codes: Array.isArray(candidate.reason_codes) ? candidate.reason_codes : [],
+        is_recommended: Boolean(
+          candidate.is_recommended
+          || (recommendedCandidateId && String(candidate.candidate_id || "") === recommendedCandidateId)
+        ),
         is_selected: Boolean(candidate.is_selected),
         created_at: candidate.created_at || null,
       }))
@@ -721,6 +767,15 @@ const compareLabUrl = resolveAssetUrl("/static/compare.html");
 
   function getSelectedImageAsset(imageAssets) {
     const candidates = collectImageAssetCandidates(imageAssets);
+    if (imageAssets?.selected_candidate && typeof imageAssets.selected_candidate === "object") {
+      const selectedCandidateId = String(imageAssets.selected_candidate.candidate_id || "");
+      if (selectedCandidateId) {
+        const explicitSelected = candidates.find((candidate) => candidate.candidate_id === selectedCandidateId);
+        if (explicitSelected) {
+          return explicitSelected;
+        }
+      }
+    }
     const selectedId = String(imageAssets?.selected_image_candidate_id || "");
     if (selectedId) {
       const explicit = candidates.find((candidate) => candidate.candidate_id === selectedId);
@@ -736,6 +791,14 @@ const compareLabUrl = resolveAssetUrl("/static/compare.html");
       return null;
     }
     return `${width} x ${height}`;
+  }
+
+  function formatScore(value) {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) {
+      return null;
+    }
+    return numeric.toFixed(1);
   }
 
   function statusCategory(job) {
@@ -930,7 +993,7 @@ const compareLabUrl = resolveAssetUrl("/static/compare.html");
       setJobsError("");
       try {
         const payload = buildStartPayload(formValues);
-        const created = await requestJSON("/api/jobs/start", {
+        const created = await requestJSON("/api/jobs/start-async", {
           method: "POST",
           body: JSON.stringify(payload),
         });
@@ -993,14 +1056,14 @@ const compareLabUrl = resolveAssetUrl("/static/compare.html");
       try {
         const basePayload = buildThemeRunPayload(themeRunValues);
         const created = themeRunMode === "manual"
-          ? await requestJSON("/api/jobs/start-from-theme", {
+          ? await requestJSON("/api/jobs/start-from-theme-async", {
               method: "POST",
               body: JSON.stringify({
                 theme_key: themeRunValues.theme_key,
                 ...basePayload,
               }),
             })
-          : await requestJSON("/api/jobs/create-daily-theme-job", {
+          : await requestJSON("/api/jobs/create-daily-theme-job-async", {
               method: "POST",
               body: JSON.stringify(basePayload),
             });
@@ -1269,7 +1332,12 @@ const compareLabUrl = resolveAssetUrl("/static/compare.html");
                             <tr key=${job.job_id}>
                               <td><${Link} className="job-link" to=${`/studio/${job.job_id}`}>${job.job_id}<//></td>
                               <td>${job.theme_name}</td>
-                              <td><${StatusBadge} value=${job.status} /></td>
+                              <td>
+                                <${StatusBadge} value=${job.status} />
+                                ${getProcessingMessage(job)
+                                  ? html`<p className="section-copy">${getProcessingMessage(job)}</p>`
+                                  : null}
+                              </td>
                               <td>${formatDate(job.updated_at)}</td>
                             </tr>
                           `,
@@ -2598,7 +2666,7 @@ const compareLabUrl = resolveAssetUrl("/static/compare.html");
       setWorkingAction("create-today-job");
       setError("");
       try {
-        const created = await requestJSON("/api/jobs/create-daily-theme-job", {
+        const created = await requestJSON("/api/jobs/create-daily-theme-job-async", {
           method: "POST",
           body: JSON.stringify(buildThemeRunPayload(todayThemeRunForm)),
         });
@@ -3261,20 +3329,10 @@ const compareLabUrl = resolveAssetUrl("/static/compare.html");
       loadStudio();
     }, [loadStudio]);
 
-    useEffect(() => {
-      if (!jobId) {
-        return undefined;
-      }
-      const intervalId = window.setInterval(() => {
-        if (document.visibilityState === "visible") {
-          loadStudio({ quiet: true });
-        }
-      }, 10000);
-      return () => window.clearInterval(intervalId);
-    }, [jobId, loadStudio]);
-
     const studioState = useMemo(() => getStudioState(job || {}), [job]);
     const currentStage = useMemo(() => getStageValue(job || {}), [job]);
+    const contentProcessingActive = useMemo(() => isContentGenerationActive(job || {}), [job]);
+    const processingMessage = useMemo(() => getProcessingMessage(job || {}), [job]);
     const selectedTextCandidate = useMemo(
       () => getSelectedTextCandidate(job || {}, candidates),
       [job, candidates],
@@ -3290,8 +3348,22 @@ const compareLabUrl = resolveAssetUrl("/static/compare.html");
     );
     const finalCards = useMemo(() => collectFinalCardOptions(job || {}, assets), [job, assets]);
     const finalPreviewSelection = usePreviewSelection(finalCards);
-    const canGenerateImages = Boolean(selectedTextCandidate);
+    const canGenerateImages = imageAssets && typeof imageAssets.can_generate === "boolean"
+      ? imageAssets.can_generate
+      : Boolean(selectedTextCandidate);
     const canRenderFinal = Boolean(selectedTextCandidate && selectedImageOption);
+
+    useEffect(() => {
+      if (!jobId) {
+        return undefined;
+      }
+      const intervalId = window.setInterval(() => {
+        if (document.visibilityState === "visible") {
+          loadStudio({ quiet: true });
+        }
+      }, contentProcessingActive ? 2000 : 10000);
+      return () => window.clearInterval(intervalId);
+    }, [jobId, loadStudio, contentProcessingActive]);
 
     async function runStudioAction(actionKey, requestFactory, successMessage, afterAction) {
       setWorkingAction(actionKey);
@@ -3383,10 +3455,14 @@ const compareLabUrl = resolveAssetUrl("/static/compare.html");
           <div className=${selectedTextCandidate ? "status-panel success" : "status-panel neutral"}>
             ${selectedTextCandidate
               ? `Selected text candidate ${selectedTextCandidate.id}: ${selectedTextCandidate.text || selectedTextCandidate.content_text}`
-              : "No text selected yet. Pick one of the shortlisted options below."}
+              : contentProcessingActive
+                ? processingMessage || "Content creation is still running in the background."
+                : "No text selected yet. Pick one of the shortlisted options below."}
           </div>
           ${shortlistOptions.length === 0
-            ? html`<p className="empty-state">No usable text shortlist is available for this job yet.</p>`
+            ? contentProcessingActive
+              ? html`<div className="status-panel warning">${processingMessage || "Content creation is still running in the background."}</div>`
+              : html`<p className="empty-state">No usable text shortlist is available for this job yet.</p>`
             : html`
                 <div className="studio-option-grid">
                   ${shortlistOptions.map((candidate) => {
@@ -3445,10 +3521,25 @@ const compareLabUrl = resolveAssetUrl("/static/compare.html");
       if (!job) {
         return null;
       }
+      const selectedImageRecord = imageAssets?.selected_candidate && typeof imageAssets.selected_candidate === "object"
+        ? imageAssets.selected_candidate
+        : selectedImageOption;
       const selectedImageDetails = [
-        imageAssets?.selected_image_candidate_id ? `candidate ${imageAssets.selected_image_candidate_id}` : null,
-        imageAssets?.selected_image_provider || null,
-        imageAssets?.selected_image_model || null,
+        selectedImageRecord?.rank ? `rank ${selectedImageRecord.rank}` : null,
+        selectedImageRecord?.candidate_id ? `candidate ${selectedImageRecord.candidate_id}` : null,
+        formatScore(selectedImageRecord?.quality_score) ? `quality ${formatScore(selectedImageRecord?.quality_score)}` : null,
+        formatScore(selectedImageRecord?.relevance_score) ? `relevance ${formatScore(selectedImageRecord?.relevance_score)}` : null,
+        selectedImageRecord?.provider || imageAssets?.selected_image_provider || null,
+        selectedImageRecord?.model || imageAssets?.selected_image_model || null,
+        formatDimensions(selectedImageRecord?.width, selectedImageRecord?.height),
+      ].filter(Boolean).join(" | ");
+      const generationSummary = [
+        imageAssets?.generation_path ? `path ${humanize(imageAssets.generation_path)}` : null,
+        imageAssets?.imageforge_request_id ? `request ${imageAssets.imageforge_request_id}` : null,
+        imageAssets?.recommended_candidate_id ? `recommended ${imageAssets.recommended_candidate_id}` : null,
+        Number(imageAssets?.candidate_count || imageOptions.length) > 0
+          ? `${Number(imageAssets?.candidate_count || imageOptions.length)} candidate${Number(imageAssets?.candidate_count || imageOptions.length) === 1 ? "" : "s"}`
+          : null,
       ].filter(Boolean).join(" | ");
       return html`
         <section className="section-panel">
@@ -3492,13 +3583,14 @@ const compareLabUrl = resolveAssetUrl("/static/compare.html");
           <div className=${selectedTextCandidate ? "status-panel neutral studio-selected-copy" : "status-panel warning studio-selected-copy"}>
             ${selectedTextCandidate
               ? `Selected text: ${selectedTextCandidate.text || selectedTextCandidate.content_text}`
-              : "Select text first. Image generation should only run after text_selected is true."}
+              : imageAssets?.blocking_reason || "Select text first. Image generation should only run after text_selected is true."}
           </div>
           ${imageAssets
             ? html`
                 <div className="status-panel neutral studio-selected-copy">
                   Image request: ${humanize(imageAssets.image_generation_status || "not_requested")}
                   ${imageAssets.image_generation_stage ? ` | provider stage: ${humanize(imageAssets.image_generation_stage)}` : ""}
+                  ${generationSummary ? ` | ${generationSummary}` : ""}
                 </div>
               `
             : null}
@@ -3508,7 +3600,7 @@ const compareLabUrl = resolveAssetUrl("/static/compare.html");
               : "No image selected yet."}
           </div>
           ${imageOptions.length === 0
-            ? html`<p className="empty-state">${canGenerateImages ? "No image candidates yet. Use Generate Image Assets to create ImageForge options." : "No image candidates yet because there is no selected text."}</p>`
+            ? html`<p className="empty-state">${canGenerateImages ? "No image candidates yet. Use Generate Image Assets to create ImageForge options." : imageAssets?.blocking_reason || "No image candidates yet because there is no selected text."}</p>`
             : html`
                 <div className="studio-image-grid">
                   ${imageOptions.map((asset) => {
@@ -3520,19 +3612,53 @@ const compareLabUrl = resolveAssetUrl("/static/compare.html");
                         </a>
                         <div className="studio-image-body">
                           <div className="studio-meta-row">
+                            ${asset.is_recommended
+                              ? html`<span className="mini-pill recommended">Recommended</span>`
+                              : null}
+                            <span className="mini-pill">rank ${asset.rank}</span>
+                            <span className="mini-pill">candidate ${asset.candidate_id || asset.candidate_index}</span>
                             <span className="mini-pill">${humanize(asset.provider)}</span>
                             <span className="mini-pill">${asset.model || "Default Model"}</span>
+                          </div>
+                          <div className="studio-meta-row">
+                            ${formatScore(asset.quality_score)
+                              ? html`<span className="score-chip">quality ${formatScore(asset.quality_score)}</span>`
+                              : null}
+                            ${formatScore(asset.relevance_score)
+                              ? html`<span className="score-chip">relevance ${formatScore(asset.relevance_score)}</span>`
+                              : null}
                           </div>
                           <div className="studio-meta-row">
                             ${formatDimensions(asset.width, asset.height)
                               ? html`<span className="mini-pill">${formatDimensions(asset.width, asset.height)}</span>`
                               : null}
                             <span className="mini-pill">${formatDate(asset.created_at)}</span>
-                            <span className="mini-pill">${isSelected ? "Selected" : `Candidate ${asset.candidate_index}`}</span>
+                            <span className="mini-pill">${isSelected ? "Selected" : `Batch ${asset.candidate_index}`}</span>
+                          </div>
+                          <div className="studio-meta-row">
+                            ${asset.imageforge_request_id
+                              ? html`<span className="mini-pill">${asset.imageforge_request_id}</span>`
+                              : null}
+                            ${asset.provider_run_id
+                              ? html`<span className="mini-pill">${asset.provider_run_id}</span>`
+                              : null}
                           </div>
                           <div className="studio-meta-row">
                             <span className="mini-pill">${asset.relative_path || "No relative path"}</span>
                           </div>
+                          ${asset.prompt_used
+                            ? html`<p className="studio-image-note"><strong>Prompt:</strong> ${truncateText(asset.prompt_used, 180)}</p>`
+                            : null}
+                          ${asset.negative_prompt_used
+                            ? html`<p className="studio-image-note"><strong>Avoid:</strong> ${truncateText(asset.negative_prompt_used, 140)}</p>`
+                            : null}
+                          ${Array.isArray(asset.reason_codes) && asset.reason_codes.length > 0
+                            ? html`
+                                <div className="studio-meta-row studio-reason-row">
+                                  ${asset.reason_codes.map((code) => html`<span key=${code} className="mini-pill">${code}</span>`)}
+                                </div>
+                              `
+                            : null}
                           <div className="inline-actions">
                             <button
                               type="button"
@@ -3542,7 +3668,7 @@ const compareLabUrl = resolveAssetUrl("/static/compare.html");
                                 () => requestJSON(`/api/jobs/${jobId}/image-assets/${asset.candidate_id}/select`, { method: "POST" }),
                                 `Selected image asset for ${jobId}`,
                               )}
-                              disabled=${workingAction === `select-image-asset:${asset.candidate_id}` || isSelected}
+                              disabled=${workingAction === `select-image-asset:${asset.candidate_id}` || isSelected || !asset.candidate_id}
                             >
                               ${workingAction === `select-image-asset:${asset.candidate_id}` ? "Working..." : isSelected ? "Using This Image" : "Use This Image"}
                             </button>
@@ -3710,6 +3836,13 @@ const compareLabUrl = resolveAssetUrl("/static/compare.html");
         ${error ? html`<div className="status-panel error">${error}</div>` : null}
         ${statusMessage ? html`<p className="status-line">${statusMessage}</p>` : null}
         ${loading ? html`<div className="status-panel warning">Loading Studio data...</div>` : null}
+        ${job && getProcessingTask(job) === "content_generation" && getProcessingState(job) !== "idle"
+          ? html`
+              <div className=${`status-panel ${getProcessingState(job) === "failed" ? "error" : "warning"}`}>
+                ${processingMessage || humanize(job.status)}
+              </div>
+            `
+          : null}
 
         ${!jobId
           ? html`
@@ -3739,7 +3872,12 @@ const compareLabUrl = resolveAssetUrl("/static/compare.html");
                               <tr key=${item.job_id}>
                                 <td>${item.job_id}</td>
                                 <td>${item.theme_name}</td>
-                                <td><${StatusBadge} value=${getStageValue(item)} /></td>
+                                <td>
+                                  <${StatusBadge} value=${getStageValue(item)} />
+                                  ${getProcessingMessage(item)
+                                    ? html`<p className="section-copy">${getProcessingMessage(item)}</p>`
+                                    : null}
+                                </td>
                                 <td>${formatDate(item.updated_at)}</td>
                                 <td><${Link} className="job-link" to=${`/studio/${item.job_id}`}>Open Studio<//></td>
                               </tr>
@@ -3764,7 +3902,13 @@ const compareLabUrl = resolveAssetUrl("/static/compare.html");
                     <article className="key-card">
                       <p className="key-label">Current Stage</p>
                       <p className="studio-current-copy">${humanize(currentStage)}</p>
-                      <p className="section-copy">${selectedTextCandidate ? "Text is selected and locked for downstream steps." : "No text has been selected yet."}</p>
+                      <p className="section-copy">
+                        ${contentProcessingActive
+                          ? processingMessage || "Content creation is still running in the background."
+                          : selectedTextCandidate
+                            ? "Text is selected and locked for downstream steps."
+                            : "No text has been selected yet."}
+                      </p>
                     </article>
                     <article className="key-card">
                       <p className="key-label">Selected Text</p>
@@ -3869,7 +4013,12 @@ const compareLabUrl = resolveAssetUrl("/static/compare.html");
                         <tr key=${job.job_id}>
                           <td>${job.job_id}</td>
                           <td>${job.theme_name}</td>
-                          <td><${StatusBadge} value=${job.status} /></td>
+                          <td>
+                            <${StatusBadge} value=${job.status} />
+                            ${getProcessingMessage(job)
+                              ? html`<p className="section-copy">${getProcessingMessage(job)}</p>`
+                              : null}
+                          </td>
                           <td>${humanize(job.current_stage)}</td>
                           <td>${formatDate(job.updated_at)}</td>
                           <td>

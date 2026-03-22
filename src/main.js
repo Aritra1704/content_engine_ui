@@ -722,13 +722,37 @@ const compareLabUrl = resolveAssetUrl("/static/compare.html");
     if (!hasCurrentPreview) {
       return [];
     }
-    const finalAssetRows = Array.isArray(assets)
-      ? assets.filter((asset) => {
-          const assetType = String(asset?.asset_type || "").toLowerCase();
-          return assetType === "final_preview" || assetType === "final_png";
-        })
-      : [];
-    return collectPreviewCandidates(job, finalAssetRows).map((candidate, index) => ({
+    const candidates = [];
+    const seen = new Set();
+    const pushFinalCandidate = (label, url, source) => {
+      const normalized = normalizePreviewUrl(url);
+      if (!normalized || seen.has(normalized) || !isLikelyImageUrl(normalized)) {
+        return;
+      }
+      seen.add(normalized);
+      candidates.push({ label, url: normalized, source });
+    };
+
+    pushFinalCandidate("Final Preview", job?.final_preview_url, "final_preview_url");
+    pushFinalCandidate(
+      "Final PNG",
+      job?.final_asset_urls && typeof job.final_asset_urls === "object" ? job.final_asset_urls.png : "",
+      "final_asset_urls.png",
+    );
+
+    if (Array.isArray(assets)) {
+      assets.forEach((asset) => {
+        const assetType = String(asset?.asset_type || "").toLowerCase();
+        if (assetType === "final_preview") {
+          pushFinalCandidate("Final Preview", asset.public_url || asset.asset_url, "asset:final_preview");
+        }
+        if (assetType === "final_png") {
+          pushFinalCandidate("Final PNG", asset.public_url || asset.asset_url, "asset:final_png");
+        }
+      });
+    }
+
+    return candidates.map((candidate, index) => ({
       key: `${candidate.source}:${index}`,
       label: candidate.label,
       url: candidate.url,

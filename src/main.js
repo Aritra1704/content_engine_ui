@@ -100,8 +100,11 @@ const compareLabUrl = resolveAssetUrl("/static/compare.html");
 
   function statusTone(statusValue) {
     const status = String(statusValue || "").toLowerCase();
-    if (status === "completed" || status === "approved" || status === "final_card_ready") {
+    if (status === "completed" || status === "approved" || status === "final_card_ready" || status === "pass" || status === "active" || status === "default") {
       return "success";
+    }
+    if (status === "review" || status === "optional") {
+      return "warning";
     }
     if (
       status === "content_candidates_ready"
@@ -122,6 +125,57 @@ const compareLabUrl = resolveAssetUrl("/static/compare.html");
 
   function StatusBadge({ value }) {
     return html`<span className=${`badge ${statusTone(value)}`}>${humanize(value)}</span>`;
+  }
+
+  function QualitySummaryPanel({ qualityResult, title = "Quality Check", compact = false }) {
+    if (!qualityResult || typeof qualityResult !== "object") {
+      return null;
+    }
+    const issues = Array.isArray(qualityResult.issues) ? qualityResult.issues : [];
+    const metrics = qualityResult.metrics && typeof qualityResult.metrics === "object" ? qualityResult.metrics : {};
+    return html`
+      <section className=${compact ? "quality-summary compact" : "quality-summary"}>
+        <div className="section-head">
+          <div>
+            <h3 className="section-title">${title}</h3>
+            <p className="section-copy">Deterministic Stage 4 quality scoring from eCardFactory.</p>
+          </div>
+          <div className="inline-actions">
+            <span className="score-chip">score ${Number(qualityResult.score || 0).toFixed(1)}</span>
+            <${StatusBadge} value=${qualityResult.status || "review"} />
+          </div>
+        </div>
+        <div className="key-value-grid quality-metrics">
+          <article className="key-card">
+            <p className="key-label">recommended_action</p>
+            <p className="key-value">${humanize(qualityResult.recommended_action || "manual_review")}</p>
+          </article>
+          <article className="key-card">
+            <p className="key-label">selected_text_words</p>
+            <p className="key-value">${metrics.selected_text_words ?? "-"}</p>
+          </article>
+          <article className="key-card">
+            <p className="key-label">target_words</p>
+            <p className="key-value">${metrics.target_words ?? "-"}</p>
+          </article>
+          <article className="key-card">
+            <p className="key-label">layout_id</p>
+            <p className="key-value">${metrics.layout_id || "-"}</p>
+          </article>
+        </div>
+        ${issues.length === 0
+          ? html`<div className="status-panel success">No explicit quality issues detected.</div>`
+          : html`
+              <div className="quality-issues">
+                ${issues.map((issue) => html`
+                  <div key=${`${issue.code}:${issue.stage}`} className=${issue.severity === "critical" ? "status-panel error" : "status-panel warning"}>
+                    <strong>${humanize(issue.stage)}:</strong> ${issue.message}
+                  </div>
+                `)}
+              </div>
+            `}
+      </section>
+    `;
   }
 
   function SidebarIcon({ name }) {
@@ -178,6 +232,15 @@ const compareLabUrl = resolveAssetUrl("/static/compare.html");
           <rect x="13.5" y="5" width="6.5" height="14" rx="2" />
           <path d="M7.25 9h0" />
           <path d="M16.75 15h0" />
+        </svg>
+      `;
+    }
+
+    if (name === "config") {
+      return html`
+        <svg ...${sharedProps}>
+          <circle cx="12" cy="12" r="3" />
+          <path d="M19.4 15a1 1 0 0 0 .2 1.1l.1.1a2 2 0 0 1 0 2.8l-.2.2a2 2 0 0 1-2.8 0l-.1-.1a1 1 0 0 0-1.1-.2 1 1 0 0 0-.6.9V20a2 2 0 0 1-2 2h-.3a2 2 0 0 1-2-2v-.2a1 1 0 0 0-.7-.9 1 1 0 0 0-1.1.2l-.1.1a2 2 0 0 1-2.8 0l-.2-.2a2 2 0 0 1 0-2.8l.1-.1a1 1 0 0 0 .2-1.1 1 1 0 0 0-.9-.6H4a2 2 0 0 1-2-2v-.3a2 2 0 0 1 2-2h.2a1 1 0 0 0 .9-.7 1 1 0 0 0-.2-1.1l-.1-.1a2 2 0 0 1 0-2.8l.2-.2a2 2 0 0 1 2.8 0l.1.1a1 1 0 0 0 1.1.2h.1a1 1 0 0 0 .6-.9V4a2 2 0 0 1 2-2h.3a2 2 0 0 1 2 2v.2a1 1 0 0 0 .6.9 1 1 0 0 0 1.1-.2l.1-.1a2 2 0 0 1 2.8 0l.2.2a2 2 0 0 1 0 2.8l-.1.1a1 1 0 0 0-.2 1.1v.1a1 1 0 0 0 .9.6H20a2 2 0 0 1 2 2v.3a2 2 0 0 1-2 2h-.2a1 1 0 0 0-.4.1" />
         </svg>
       `;
     }
@@ -290,7 +353,7 @@ const compareLabUrl = resolveAssetUrl("/static/compare.html");
       tone_funny_pct: Number(formValues.tone_funny_pct || 20),
       tone_emotion_pct: Number(formValues.tone_emotion_pct || 80),
       tone_style: String(formValues.tone_style || "conversational"),
-      audience: String(formValues.audience || "internal reviewer").trim(),
+      audience: String(formValues.audience || "general audience").trim(),
       cultural_context: String(formValues.cultural_context || "global").trim(),
       output_spec: buildOutputSpec(formValues.copy_style, formValues.target_words),
       avoid_cliches: true,
@@ -333,15 +396,15 @@ const compareLabUrl = resolveAssetUrl("/static/compare.html");
     return "minimal";
   }
 
-  function buildFormValuesFromResolvedTheme(theme) {
+  function buildFormValuesFromResolvedTheme(theme, optionCatalog = null) {
     if (!theme || typeof theme !== "object") {
       return null;
     }
     return {
       theme_name: String(theme.theme_name || "Internal Theme").trim(),
-      audience: String(theme.audience || "internal reviewer").trim(),
-      cultural_context: String(theme.cultural_context || "global").trim(),
-      tone_style: String(theme.tone_style || "conversational").trim(),
+      audience: String(theme.audience || resolveDefaultOperatorOption(optionCatalog, "audience", "general audience")).trim(),
+      cultural_context: String(theme.cultural_context || resolveDefaultOperatorOption(optionCatalog, "cultural_context", "global")).trim(),
+      tone_style: String(theme.tone_style || resolveDefaultOperatorOption(optionCatalog, "tone_style", "conversational")).trim(),
       tone_funny_pct: Number(theme.tone_funny_pct ?? 20),
       tone_emotion_pct: Number(theme.tone_emotion_pct ?? 80),
       copy_style: resolveStudioCopyStyle(theme.tone_style),
@@ -357,12 +420,12 @@ const compareLabUrl = resolveAssetUrl("/static/compare.html");
     };
   }
 
-  function buildThemeRunDefaults(theme = null) {
+  function buildThemeRunDefaults(theme = null, optionCatalog = null) {
     return {
       theme_key: "",
       cards_per_theme: 10,
       notes: "",
-      copy_style: resolveStudioCopyStyle(theme?.tone_style || theme?.default_tone_style),
+      copy_style: resolveStudioCopyStyle(theme?.tone_style || theme?.default_tone_style || resolveDefaultOperatorOption(optionCatalog, "copy_style", "minimal")),
       target_words: 14,
       tone_funny_pct: Number(theme?.tone_funny_pct ?? theme?.default_funny_pct ?? 20),
     };
@@ -378,12 +441,119 @@ const compareLabUrl = resolveAssetUrl("/static/compare.html");
     };
   }
 
-  const STUDIO_STYLE_OPTIONS = [
-    { value: "witty", label: "witty" },
-    { value: "playful", label: "playful" },
-    { value: "heartfelt", label: "heartfelt" },
-    { value: "minimal", label: "minimal" },
+  const OPERATOR_CONFIG_CATEGORIES = [
+    { value: "audience", label: "Audience", description: "Who the card is written for." },
+    { value: "cultural_context", label: "Cultural Context", description: "Regional or cultural framing for copy and imagery." },
+    { value: "tone_style", label: "Tone Style", description: "Writing tone used by job and theme creation forms." },
+    { value: "copy_style", label: "Copy Style", description: "Short card-copy format options for manual runs." },
+    { value: "visual_style", label: "Visual Style", description: "Theme default visual directions." },
+    { value: "theme_bucket", label: "Theme Bucket", description: "Theme Factory grouping for resolution logic." },
+    { value: "theme_type", label: "Theme Type", description: "Theme lifecycle/category classification." },
+    { value: "schedule_type", label: "Schedule Type", description: "Theme schedule row types." },
+    { value: "override_scope", label: "Override Scope", description: "Theme override usage scope." },
   ];
+
+  const STUDIO_STYLE_OPTIONS = [
+    { id: "fallback:minimal", option_value: "minimal", label: "minimal" },
+    { id: "fallback:witty", option_value: "witty", label: "witty" },
+    { id: "fallback:playful", option_value: "playful", label: "playful" },
+    { id: "fallback:heartfelt", option_value: "heartfelt", label: "heartfelt" },
+  ];
+
+  function normalizeOperatorOptionCatalog(payload) {
+    const categories = payload && typeof payload === "object" && payload.categories && typeof payload.categories === "object"
+      ? payload.categories
+      : {};
+    return {
+      source: String(payload?.source || "seed"),
+      categories,
+    };
+  }
+
+  async function fetchOperatorOptionCatalog({ includeInactive = false } = {}) {
+    const suffix = includeInactive ? "?include_inactive=true" : "";
+    const payload = await requestJSON(`/api/config/options${suffix}`);
+    return normalizeOperatorOptionCatalog(payload);
+  }
+
+  function getCategoryConfig(category) {
+    return OPERATOR_CONFIG_CATEGORIES.find((item) => item.value === category) || {
+      value: category,
+      label: humanize(category),
+      description: "",
+    };
+  }
+
+  function getOperatorOptions(catalog, category) {
+    const items = catalog && typeof catalog === "object" && catalog.categories && typeof catalog.categories === "object"
+      ? catalog.categories[category]
+      : [];
+    return Array.isArray(items) ? items : [];
+  }
+
+  function withCurrentOption(options, value) {
+    const normalized = String(value || "").trim();
+    if (!normalized) {
+      return options;
+    }
+    if (options.some((item) => String(item.option_value || item.value || "").trim() === normalized)) {
+      return options;
+    }
+    return [
+      {
+        id: `current:${normalized}`,
+        option_key: `current_${normalized}`,
+        option_value: normalized,
+        label: normalized,
+        description: "Current value not yet present in config catalog.",
+        is_active: true,
+        is_default: false,
+      },
+      ...options,
+    ];
+  }
+
+  function resolveDefaultOperatorOption(catalog, category, fallbackValue) {
+    const options = getOperatorOptions(catalog, category);
+    const defaultOption = options.find((item) => item.is_default && item.is_active !== false);
+    if (defaultOption && String(defaultOption.option_value || "").trim()) {
+      return String(defaultOption.option_value).trim();
+    }
+    const firstOption = options.find((item) => item.is_active !== false && String(item.option_value || "").trim());
+    if (firstOption) {
+      return String(firstOption.option_value).trim();
+    }
+    return String(fallbackValue || "").trim();
+  }
+
+  function renderConfigOptions(options) {
+    return options.map(
+      (option) => html`<option key=${option.id || `${option.option_key}:${option.option_value}`} value=${option.option_value}>${option.label || option.option_value}</option>`,
+    );
+  }
+
+  function makeOptionKey(value) {
+    return String(value || "")
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "_")
+      .replace(/^_+|_+$/g, "");
+  }
+
+  function buildCreateJobDefaults(optionCatalog = null) {
+    return {
+      theme_name: "Internal Launch Sprint",
+      audience: resolveDefaultOperatorOption(optionCatalog, "audience", "general audience"),
+      cultural_context: resolveDefaultOperatorOption(optionCatalog, "cultural_context", "global"),
+      tone_style: resolveDefaultOperatorOption(optionCatalog, "tone_style", "conversational"),
+      tone_funny_pct: 20,
+      tone_emotion_pct: 80,
+      copy_style: resolveDefaultOperatorOption(optionCatalog, "copy_style", "minimal"),
+      target_words: 14,
+      cards_per_theme: 10,
+      notes: "",
+    };
+  }
 
   function copyStyleLabel(value) {
     const normalized = resolveStudioCopyStyle(value);
@@ -399,10 +569,16 @@ const compareLabUrl = resolveAssetUrl("/static/compare.html");
     return "Minimal";
   }
 
-  function renderStudioStyleOptions() {
-    return STUDIO_STYLE_OPTIONS.map(
-      (option) => html`<option key=${option.value} value=${option.value}>${option.label}</option>`,
-    );
+  function renderStudioStyleOptions(optionCatalog = null, currentValue = "") {
+    const configured = getOperatorOptions(optionCatalog, "copy_style");
+    const options = configured.length > 0
+      ? withCurrentOption(configured, currentValue)
+      : STUDIO_STYLE_OPTIONS.map((item, index) => ({
+          id: `fallback:${index}`,
+          option_value: item.value,
+          label: item.label,
+        }));
+    return renderConfigOptions(options);
   }
 
   function getJobOutputSpec(job) {
@@ -857,23 +1033,19 @@ const compareLabUrl = resolveAssetUrl("/static/compare.html");
     const [themeRunOpen, setThemeRunOpen] = useState(false);
     const [themeRunMode, setThemeRunMode] = useState("today");
     const [themeCatalog, setThemeCatalog] = useState([]);
+    const [operatorOptionCatalog, setOperatorOptionCatalog] = useState({ source: "seed", categories: {} });
+    const [configLoading, setConfigLoading] = useState(false);
+    const [configError, setConfigError] = useState("");
     const [creating, setCreating] = useState(false);
     const [creatingThemeJob, setCreatingThemeJob] = useState(false);
     const [cardActionState, setCardActionState] = useState("");
-    const [formValues, setFormValues] = useState({
-      theme_name: "Internal Launch Sprint",
-      audience: "operations team",
-      cultural_context: "global",
-      tone_style: "conversational",
-      tone_funny_pct: 20,
-      tone_emotion_pct: 80,
-      copy_style: "minimal",
-      target_words: 14,
-      cards_per_theme: 10,
-      notes: "",
-    });
+    const [formValues, setFormValues] = useState(buildCreateJobDefaults());
     const [themeRunValues, setThemeRunValues] = useState(buildThemeRunDefaults());
     const resolvedTodayTheme = todayTheme && typeof todayTheme === "object" ? todayTheme.theme || null : null;
+    const audienceOptions = useMemo(() => withCurrentOption(getOperatorOptions(operatorOptionCatalog, "audience"), formValues.audience), [operatorOptionCatalog, formValues.audience]);
+    const contextOptions = useMemo(() => withCurrentOption(getOperatorOptions(operatorOptionCatalog, "cultural_context"), formValues.cultural_context), [operatorOptionCatalog, formValues.cultural_context]);
+    const toneOptions = useMemo(() => withCurrentOption(getOperatorOptions(operatorOptionCatalog, "tone_style"), formValues.tone_style), [operatorOptionCatalog, formValues.tone_style]);
+    const copyStyleOptions = useMemo(() => withCurrentOption(getOperatorOptions(operatorOptionCatalog, "copy_style"), formValues.copy_style), [operatorOptionCatalog, formValues.copy_style]);
 
     const summary = useMemo(() => {
       let active = 0;
@@ -925,16 +1097,19 @@ const compareLabUrl = resolveAssetUrl("/static/compare.html");
       setJobsLoading(true);
       setStorageLoading(true);
       setThemeLoading(true);
+      setConfigLoading(true);
       setJobsError("");
       setStorageError("");
       setThemeError("");
+      setConfigError("");
       setThemeNotice("");
 
-      const [jobsResult, storageResult, scheduleResult, todayResult] = await Promise.allSettled([
+      const [jobsResult, storageResult, scheduleResult, todayResult, configResult] = await Promise.allSettled([
         requestJSON("/api/jobs?limit=50"),
         requestJSON("/api/storage/summary"),
         requestJSON("/api/themes/schedule"),
         requestJSON("/api/themes/today"),
+        fetchOperatorOptionCatalog(),
       ]);
       let nextThemeNotice = "";
 
@@ -988,9 +1163,35 @@ const compareLabUrl = resolveAssetUrl("/static/compare.html");
       }
       setThemeNotice(nextThemeNotice);
 
+      if (configResult.status === "fulfilled") {
+        setOperatorOptionCatalog(configResult.value);
+        setFormValues((current) => {
+          const defaults = buildCreateJobDefaults(configResult.value);
+          return {
+            ...defaults,
+            ...current,
+            audience: current.audience || defaults.audience,
+            cultural_context: current.cultural_context || defaults.cultural_context,
+            tone_style: current.tone_style || defaults.tone_style,
+            copy_style: current.copy_style || defaults.copy_style,
+          };
+        });
+        setThemeRunValues((current) => {
+          const defaults = buildThemeRunDefaults(resolvedTodayTheme, configResult.value);
+          return {
+            ...defaults,
+            ...current,
+            copy_style: current.copy_style || defaults.copy_style,
+          };
+        });
+      } else {
+        setConfigError(normalizeDashboardError("config options", configResult.reason));
+      }
+
       setJobsLoading(false);
       setStorageLoading(false);
       setThemeLoading(false);
+      setConfigLoading(false);
       const themeScheduleFailure =
         scheduleResult.status !== "fulfilled" && !isOptionalThemeMissingError(scheduleResult.reason);
       const todayThemeFailure =
@@ -999,7 +1200,8 @@ const compareLabUrl = resolveAssetUrl("/static/compare.html");
         jobsResult.status !== "fulfilled" ||
         storageResult.status !== "fulfilled" ||
         themeScheduleFailure ||
-        todayThemeFailure;
+        todayThemeFailure ||
+        configResult.status !== "fulfilled";
       setStatusMessage(
         hasFailures
           ? `Refresh completed with errors at ${new Date().toLocaleTimeString()}`
@@ -1034,8 +1236,13 @@ const compareLabUrl = resolveAssetUrl("/static/compare.html");
       setFormValues((current) => ({ ...current, [key]: value }));
     }
 
+    function openCreateJobModal() {
+      setFormValues((current) => ({ ...buildCreateJobDefaults(operatorOptionCatalog), ...current }));
+      setCreateOpen(true);
+    }
+
     function applyTodayThemeToForm() {
-      const nextValues = buildFormValuesFromResolvedTheme(resolvedTodayTheme);
+      const nextValues = buildFormValuesFromResolvedTheme(resolvedTodayTheme, operatorOptionCatalog);
       if (!nextValues) {
         return;
       }
@@ -1055,13 +1262,13 @@ const compareLabUrl = resolveAssetUrl("/static/compare.html");
     async function openThemeRunModal(mode) {
       setThemeRunMode(mode);
       setThemeError("");
-      setThemeRunValues(buildThemeRunDefaults(resolvedTodayTheme));
+      setThemeRunValues(buildThemeRunDefaults(resolvedTodayTheme, operatorOptionCatalog));
       if (mode === "manual") {
         try {
           const items = await ensureThemeCatalogLoaded();
           const firstTheme = items[0] || null;
           setThemeRunValues({
-            ...buildThemeRunDefaults(firstTheme),
+            ...buildThemeRunDefaults(firstTheme, operatorOptionCatalog),
             theme_key: firstTheme?.theme_key || "",
           });
           setThemeRunOpen(true);
@@ -1164,7 +1371,7 @@ const compareLabUrl = resolveAssetUrl("/static/compare.html");
               Generate Today's Cards
             </button>
             <button type="button" className="button" onClick=${() => openThemeRunModal("manual")}>Generate From Theme</button>
-            <button type="button" className="button" onClick=${() => setCreateOpen(true)}>Create New Card Job</button>
+            <button type="button" className="button" onClick=${openCreateJobModal}>Create New Card Job</button>
             <button
               type="button"
               className="button"
@@ -1178,7 +1385,7 @@ const compareLabUrl = resolveAssetUrl("/static/compare.html");
 
         ${statusMessage ? html`<p className="status-line">${statusMessage}</p>` : null}
 
-        ${(jobsLoading || storageLoading || themeLoading || jobsError || storageError || themeError)
+        ${(jobsLoading || storageLoading || themeLoading || configLoading || jobsError || storageError || themeError || configError)
           ? html`
               <div className="status-stack">
                 ${jobsLoading
@@ -1190,11 +1397,15 @@ const compareLabUrl = resolveAssetUrl("/static/compare.html");
                 ${themeLoading
                   ? html`<div className="status-panel warning">Loading Theme Factory data from /api/themes/schedule...</div>`
                   : null}
+                ${configLoading
+                  ? html`<div className="status-panel warning">Loading operator config from /api/config/options...</div>`
+                  : null}
                 ${jobsError ? html`<div className="status-panel error">Unable to load jobs: ${jobsError}</div>` : null}
                 ${storageError
                   ? html`<div className="status-panel error">Unable to load storage summary: ${storageError}</div>`
                   : null}
                 ${themeError ? html`<div className="status-panel error">Theme error: ${themeError}</div>` : null}
+                ${configError ? html`<div className="status-panel error">Config error: ${configError}</div>` : null}
               </div>
             `
           : null}
@@ -1238,7 +1449,7 @@ const compareLabUrl = resolveAssetUrl("/static/compare.html");
                 ${creatingThemeJob && themeRunMode === "today" ? "Generating..." : "Generate Today's Cards"}
               </button>
               <button type="button" className="button" onClick=${() => openThemeRunModal("manual")}>Generate From Theme</button>
-              <button type="button" className="button" onClick=${() => setCreateOpen(true)}>Create New Card Job</button>
+              <button type="button" className="button" onClick=${openCreateJobModal}>Create New Card Job</button>
             </div>
           </div>
           ${resolvedTodayTheme
@@ -1429,21 +1640,25 @@ const compareLabUrl = resolveAssetUrl("/static/compare.html");
                       </div>
                       <div className="form-field">
                         <label htmlFor="audience">Audience</label>
-                        <input
+                        <select
                           id="audience"
                           value=${formValues.audience}
-                          onInput=${(event) => updateField("audience", event.target.value)}
+                          onChange=${(event) => updateField("audience", event.target.value)}
                           required
-                        />
+                        >
+                          ${renderConfigOptions(audienceOptions)}
+                        </select>
                       </div>
                       <div className="form-field">
                         <label htmlFor="culturalContext">Cultural Context</label>
-                        <input
+                        <select
                           id="culturalContext"
                           value=${formValues.cultural_context}
-                          onInput=${(event) => updateField("cultural_context", event.target.value)}
+                          onChange=${(event) => updateField("cultural_context", event.target.value)}
                           required
-                        />
+                        >
+                          ${renderConfigOptions(contextOptions)}
+                        </select>
                       </div>
                       <div className="form-field">
                         <label htmlFor="toneStyle">Tone Style</label>
@@ -1452,10 +1667,7 @@ const compareLabUrl = resolveAssetUrl("/static/compare.html");
                           value=${formValues.tone_style}
                           onChange=${(event) => updateField("tone_style", event.target.value)}
                         >
-                          <option value="conversational">conversational</option>
-                          <option value="minimal">minimal</option>
-                          <option value="poetic">poetic</option>
-                          <option value="witty">witty</option>
+                          ${renderConfigOptions(toneOptions)}
                         </select>
                       </div>
                       <div className="form-field">
@@ -1487,7 +1699,7 @@ const compareLabUrl = resolveAssetUrl("/static/compare.html");
                           value=${formValues.copy_style}
                           onChange=${(event) => updateField("copy_style", event.target.value)}
                         >
-                          ${renderStudioStyleOptions()}
+                          ${renderStudioStyleOptions(operatorOptionCatalog, formValues.copy_style)}
                         </select>
                       </div>
                       <div className="form-field">
@@ -1584,7 +1796,7 @@ const compareLabUrl = resolveAssetUrl("/static/compare.html");
                           value=${themeRunValues.copy_style}
                           onChange=${(event) => setThemeRunValues((current) => ({ ...current, copy_style: event.target.value }))}
                         >
-                          ${renderStudioStyleOptions()}
+                          ${renderStudioStyleOptions(operatorOptionCatalog, themeRunValues.copy_style)}
                         </select>
                       </div>
                       <div className="form-field">
@@ -2157,6 +2369,7 @@ const compareLabUrl = resolveAssetUrl("/static/compare.html");
                     ${workingAction === "reject-final" ? "Working..." : "Reject Final"}
                   </button>
                 </div>
+                <${QualitySummaryPanel} qualityResult=${job.quality_result} title="Stage 4 Quality" />
               </section>
 
               <section className="two-column">
@@ -2371,6 +2584,7 @@ const compareLabUrl = resolveAssetUrl("/static/compare.html");
     const [notice, setNotice] = useState("");
     const [statusMessage, setStatusMessage] = useState("");
     const [workingAction, setWorkingAction] = useState("");
+    const [operatorOptionCatalog, setOperatorOptionCatalog] = useState({ source: "seed", categories: {} });
     const [themeEditorOpen, setThemeEditorOpen] = useState(false);
     const [scheduleEditorOpen, setScheduleEditorOpen] = useState(false);
     const [overrideEditorOpen, setOverrideEditorOpen] = useState(false);
@@ -2417,6 +2631,14 @@ const compareLabUrl = resolveAssetUrl("/static/compare.html");
     const [todayThemeRunForm, setTodayThemeRunForm] = useState(buildThemeRunDefaults());
 
     const resolvedTodayTheme = todayTheme && typeof todayTheme === "object" ? todayTheme.theme || null : null;
+    const themeBucketOptions = useMemo(() => withCurrentOption(getOperatorOptions(operatorOptionCatalog, "theme_bucket"), themeForm.theme_bucket), [operatorOptionCatalog, themeForm.theme_bucket]);
+    const themeTypeOptions = useMemo(() => withCurrentOption(getOperatorOptions(operatorOptionCatalog, "theme_type"), themeForm.theme_type), [operatorOptionCatalog, themeForm.theme_type]);
+    const themeContextOptions = useMemo(() => withCurrentOption(getOperatorOptions(operatorOptionCatalog, "cultural_context"), themeForm.cultural_context), [operatorOptionCatalog, themeForm.cultural_context]);
+    const themeToneOptions = useMemo(() => withCurrentOption(getOperatorOptions(operatorOptionCatalog, "tone_style"), themeForm.tone_style), [operatorOptionCatalog, themeForm.tone_style]);
+    const themeAudienceOptions = useMemo(() => withCurrentOption(getOperatorOptions(operatorOptionCatalog, "audience"), themeForm.default_audience), [operatorOptionCatalog, themeForm.default_audience]);
+    const themeVisualOptions = useMemo(() => withCurrentOption(getOperatorOptions(operatorOptionCatalog, "visual_style"), themeForm.default_visual_style), [operatorOptionCatalog, themeForm.default_visual_style]);
+    const scheduleTypeOptions = useMemo(() => withCurrentOption(getOperatorOptions(operatorOptionCatalog, "schedule_type"), scheduleForm.schedule_type), [operatorOptionCatalog, scheduleForm.schedule_type]);
+    const overrideScopeOptions = useMemo(() => withCurrentOption(getOperatorOptions(operatorOptionCatalog, "override_scope"), overrideForm.override_scope), [operatorOptionCatalog, overrideForm.override_scope]);
     const bucketCounts = useMemo(
       () => catalog.reduce(
         (accumulator, theme) => {
@@ -2456,10 +2678,11 @@ const compareLabUrl = resolveAssetUrl("/static/compare.html");
       setLoading(true);
       setError("");
       setNotice("");
-      const [catalogResult, todayResult, scheduleResult] = await Promise.allSettled([
+      const [catalogResult, todayResult, scheduleResult, configResult] = await Promise.allSettled([
         requestJSON("/api/themes"),
         requestJSON("/api/themes/today"),
         requestJSON("/api/themes/schedule"),
+        fetchOperatorOptionCatalog(),
       ]);
 
       if (catalogResult.status === "fulfilled") {
@@ -2516,6 +2739,12 @@ const compareLabUrl = resolveAssetUrl("/static/compare.html");
         }
       }
 
+      if (configResult.status === "fulfilled") {
+        setOperatorOptionCatalog(configResult.value);
+      } else {
+        setError((current) => current || normalizeDashboardError("config options", configResult.reason));
+      }
+
       setLoading(false);
     }
 
@@ -2529,14 +2758,14 @@ const compareLabUrl = resolveAssetUrl("/static/compare.html");
         theme_key: theme?.theme_key || "",
         theme_name: theme?.theme_name || "",
         description: theme?.description || "",
-        theme_bucket: theme?.theme_bucket || "everyday",
-        theme_type: theme?.theme_type || "evergreen",
-        cultural_context: theme?.cultural_context || "global",
-        tone_style: theme?.tone_style || "conversational",
+        theme_bucket: theme?.theme_bucket || resolveDefaultOperatorOption(operatorOptionCatalog, "theme_bucket", "everyday"),
+        theme_type: theme?.theme_type || resolveDefaultOperatorOption(operatorOptionCatalog, "theme_type", "evergreen"),
+        cultural_context: theme?.cultural_context || resolveDefaultOperatorOption(operatorOptionCatalog, "cultural_context", "global"),
+        tone_style: theme?.tone_style || resolveDefaultOperatorOption(operatorOptionCatalog, "tone_style", "conversational"),
         default_funny_pct: theme?.default_funny_pct ?? 20,
         default_emotion_pct: theme?.default_emotion_pct ?? 80,
-        default_audience: theme?.default_audience || "general audience",
-        default_visual_style: theme?.default_visual_style || "minimal",
+        default_audience: theme?.default_audience || resolveDefaultOperatorOption(operatorOptionCatalog, "audience", "general audience"),
+        default_visual_style: theme?.default_visual_style || resolveDefaultOperatorOption(operatorOptionCatalog, "visual_style", "minimal"),
         is_active: theme?.is_active ?? true,
         priority: theme?.priority ?? 0,
       });
@@ -2547,7 +2776,7 @@ const compareLabUrl = resolveAssetUrl("/static/compare.html");
       setEditingScheduleId(schedule ? schedule.id : null);
       setScheduleForm({
         theme_id: String(schedule?.theme_id || catalog[0]?.id || ""),
-        schedule_type: schedule?.schedule_type || "weekly_recurring",
+        schedule_type: schedule?.schedule_type || resolveDefaultOperatorOption(operatorOptionCatalog, "schedule_type", "weekly_recurring"),
         start_date: formatDateInput(schedule?.start_date),
         end_date: formatDateInput(schedule?.end_date),
         weekday_mask: Array.isArray(schedule?.weekday_mask) ? schedule.weekday_mask.join(", ") : "monday",
@@ -2566,7 +2795,7 @@ const compareLabUrl = resolveAssetUrl("/static/compare.html");
       const end = new Date(start.getTime() + 24 * 60 * 60 * 1000);
       setOverrideForm({
         theme_id: String(themeId || resolvedTodayTheme?.theme_id || catalog[0]?.id || ""),
-        override_scope: "editorial",
+        override_scope: resolveDefaultOperatorOption(operatorOptionCatalog, "override_scope", "editorial"),
         start_at: formatDateTimeLocalInput(start.toISOString()),
         end_at: formatDateTimeLocalInput(end.toISOString()),
         reason: "",
@@ -2718,7 +2947,7 @@ const compareLabUrl = resolveAssetUrl("/static/compare.html");
               type="button"
               className="button primary"
               onClick=${() => {
-                setTodayThemeRunForm(buildThemeRunDefaults(resolvedTodayTheme));
+                setTodayThemeRunForm(buildThemeRunDefaults(resolvedTodayTheme, operatorOptionCatalog));
                 setTodayThemeRunOpen(true);
               }}
               disabled=${workingAction === "create-today-job" || !resolvedTodayTheme}
@@ -3019,7 +3248,7 @@ const compareLabUrl = resolveAssetUrl("/static/compare.html");
                           value=${todayThemeRunForm.copy_style}
                           onChange=${(event) => setTodayThemeRunForm((current) => ({ ...current, copy_style: event.target.value }))}
                         >
-                          ${renderStudioStyleOptions()}
+                          ${renderStudioStyleOptions(operatorOptionCatalog, todayThemeRunForm.copy_style)}
                         </select>
                       </div>
                       <div className="form-field">
@@ -3101,35 +3330,38 @@ const compareLabUrl = resolveAssetUrl("/static/compare.html");
                       <div className="form-field">
                         <label htmlFor="themeBucket">Theme Bucket</label>
                         <select id="themeBucket" value=${themeForm.theme_bucket} onChange=${(event) => setThemeForm((current) => ({ ...current, theme_bucket: event.target.value }))}>
-                          <option value="everyday">everyday</option>
-                          <option value="occasion">occasion</option>
-                          <option value="current_event">current event</option>
+                          ${renderConfigOptions(themeBucketOptions)}
                         </select>
                       </div>
                       <div className="form-field">
                         <label htmlFor="themeType">Theme Type</label>
                         <select id="themeType" value=${themeForm.theme_type} onChange=${(event) => setThemeForm((current) => ({ ...current, theme_type: event.target.value }))}>
-                          <option value="evergreen">evergreen</option>
-                          <option value="calendar">calendar</option>
-                          <option value="campaign">campaign</option>
-                          <option value="news">news</option>
+                          ${renderConfigOptions(themeTypeOptions)}
                         </select>
                       </div>
                       <div className="form-field">
                         <label htmlFor="themeContext">Cultural Context</label>
-                        <input id="themeContext" value=${themeForm.cultural_context} onInput=${(event) => setThemeForm((current) => ({ ...current, cultural_context: event.target.value }))} />
+                        <select id="themeContext" value=${themeForm.cultural_context} onChange=${(event) => setThemeForm((current) => ({ ...current, cultural_context: event.target.value }))}>
+                          ${renderConfigOptions(themeContextOptions)}
+                        </select>
                       </div>
                       <div className="form-field">
                         <label htmlFor="themeTone">Tone Style</label>
-                        <input id="themeTone" value=${themeForm.tone_style} onInput=${(event) => setThemeForm((current) => ({ ...current, tone_style: event.target.value }))} required />
+                        <select id="themeTone" value=${themeForm.tone_style} onChange=${(event) => setThemeForm((current) => ({ ...current, tone_style: event.target.value }))} required>
+                          ${renderConfigOptions(themeToneOptions)}
+                        </select>
                       </div>
                       <div className="form-field">
                         <label htmlFor="themeAudience">Audience</label>
-                        <input id="themeAudience" value=${themeForm.default_audience} onInput=${(event) => setThemeForm((current) => ({ ...current, default_audience: event.target.value }))} required />
+                        <select id="themeAudience" value=${themeForm.default_audience} onChange=${(event) => setThemeForm((current) => ({ ...current, default_audience: event.target.value }))} required>
+                          ${renderConfigOptions(themeAudienceOptions)}
+                        </select>
                       </div>
                       <div className="form-field">
                         <label htmlFor="themeVisual">Visual Style</label>
-                        <input id="themeVisual" value=${themeForm.default_visual_style} onInput=${(event) => setThemeForm((current) => ({ ...current, default_visual_style: event.target.value }))} required />
+                        <select id="themeVisual" value=${themeForm.default_visual_style} onChange=${(event) => setThemeForm((current) => ({ ...current, default_visual_style: event.target.value }))} required>
+                          ${renderConfigOptions(themeVisualOptions)}
+                        </select>
                       </div>
                       <div className="form-field">
                         <label htmlFor="themePriority">Priority</label>
@@ -3180,10 +3412,7 @@ const compareLabUrl = resolveAssetUrl("/static/compare.html");
                       <div className="form-field">
                         <label htmlFor="scheduleType">Schedule Type</label>
                         <select id="scheduleType" value=${scheduleForm.schedule_type} onChange=${(event) => setScheduleForm((current) => ({ ...current, schedule_type: event.target.value }))}>
-                          <option value="single_day">single_day</option>
-                          <option value="date_range">date_range</option>
-                          <option value="weekly_recurring">weekly_recurring</option>
-                          <option value="monthly_recurring">monthly_recurring</option>
+                          ${renderConfigOptions(scheduleTypeOptions)}
                         </select>
                       </div>
                       <div className="form-field">
@@ -3250,7 +3479,9 @@ const compareLabUrl = resolveAssetUrl("/static/compare.html");
                       </div>
                       <div className="form-field">
                         <label htmlFor="overrideScope">Scope</label>
-                        <input id="overrideScope" value=${overrideForm.override_scope} onInput=${(event) => setOverrideForm((current) => ({ ...current, override_scope: event.target.value }))} required />
+                        <select id="overrideScope" value=${overrideForm.override_scope} onChange=${(event) => setOverrideForm((current) => ({ ...current, override_scope: event.target.value }))} required>
+                          ${renderConfigOptions(overrideScopeOptions)}
+                        </select>
                       </div>
                       <div className="form-field">
                         <label htmlFor="overrideBy">Created By</label>
@@ -3278,6 +3509,302 @@ const compareLabUrl = resolveAssetUrl("/static/compare.html");
                         ${workingAction === "save-override" ? "Saving..." : "Save Override"}
                       </button>
                       <button type="button" className="button" onClick=${() => setOverrideEditorOpen(false)}>Cancel</button>
+                    </div>
+                  </form>
+                </section>
+              </div>
+            `
+          : null}
+      </section>
+    `;
+  }
+
+  function ConfigCatalogPage() {
+    const [optionCatalog, setOptionCatalog] = useState({ source: "seed", categories: {} });
+    const [loading, setLoading] = useState(false);
+    const [error, setError] = useState("");
+    const [statusMessage, setStatusMessage] = useState("");
+    const [workingAction, setWorkingAction] = useState("");
+    const [editorOpen, setEditorOpen] = useState(false);
+    const [editingOptionId, setEditingOptionId] = useState(null);
+    const [optionForm, setOptionForm] = useState({
+      category: "audience",
+      option_key: "general_audience",
+      option_value: "general audience",
+      label: "General Audience",
+      description: "",
+      sort_order: 10,
+      is_active: true,
+      is_default: false,
+    });
+
+    const categorySections = useMemo(
+      () => OPERATOR_CONFIG_CATEGORIES.map((category) => ({
+        ...category,
+        items: getOperatorOptions(optionCatalog, category.value),
+      })),
+      [optionCatalog],
+    );
+    const totalOptions = useMemo(
+      () => categorySections.reduce((sum, section) => sum + section.items.length, 0),
+      [categorySections],
+    );
+    const activeOptions = useMemo(
+      () => categorySections.reduce((sum, section) => sum + section.items.filter((item) => item.is_active !== false).length, 0),
+      [categorySections],
+    );
+    const defaultOptions = useMemo(
+      () => categorySections.reduce((sum, section) => sum + section.items.filter((item) => item.is_default).length, 0),
+      [categorySections],
+    );
+
+    async function loadOptionCatalog() {
+      setLoading(true);
+      setError("");
+      try {
+        const payload = await fetchOperatorOptionCatalog({ includeInactive: true });
+        setOptionCatalog(payload);
+      } catch (requestError) {
+        setError(requestError.message || "Unable to load config catalog");
+      } finally {
+        setLoading(false);
+      }
+    }
+
+    useEffect(() => {
+      loadOptionCatalog();
+    }, []);
+
+    function openOptionEditor(option = null, category = null) {
+      const nextCategory = category || option?.category || "audience";
+      setEditingOptionId(option ? option.id : null);
+      setOptionForm({
+        category: nextCategory,
+        option_key: option?.option_key || "",
+        option_value: option?.option_value || "",
+        label: option?.label || "",
+        description: option?.description || "",
+        sort_order: option?.sort_order ?? (getOperatorOptions(optionCatalog, nextCategory).length + 1) * 10,
+        is_active: option?.is_active ?? true,
+        is_default: option?.is_default ?? false,
+      });
+      setEditorOpen(true);
+    }
+
+    async function handleSaveOption(event) {
+      event.preventDefault();
+      setWorkingAction("save-option");
+      setError("");
+      try {
+        const payload = {
+          category: optionForm.category,
+          option_key: String(optionForm.option_key || optionForm.option_value || optionForm.label || "").trim(),
+          option_value: String(optionForm.option_value || "").trim(),
+          label: String(optionForm.label || "").trim(),
+          description: String(optionForm.description || "").trim() || null,
+          sort_order: Number(optionForm.sort_order || 0),
+          is_active: Boolean(optionForm.is_active),
+          is_default: Boolean(optionForm.is_default),
+        };
+        const url = editingOptionId ? `/api/config/options/${editingOptionId}` : "/api/config/options";
+        const method = editingOptionId ? "PUT" : "POST";
+        await requestJSON(url, { method, body: JSON.stringify(payload) });
+        setEditorOpen(false);
+        setStatusMessage(editingOptionId ? "Config option updated" : "Config option created");
+        await loadOptionCatalog();
+      } catch (requestError) {
+        setError(requestError.message || "Unable to save config option");
+      } finally {
+        setWorkingAction("");
+      }
+    }
+
+    async function handleDeleteOption(option) {
+      const confirmed = window.confirm(`Deactivate option '${option.label || option.option_value}'?`);
+      if (!confirmed) {
+        return;
+      }
+      setWorkingAction(`delete-option:${option.id}`);
+      setError("");
+      try {
+        await requestJSON(`/api/config/options/${option.id}`, { method: "DELETE" });
+        setStatusMessage(`Config option deactivated: ${option.label || option.option_value}`);
+        await loadOptionCatalog();
+      } catch (requestError) {
+        setError(requestError.message || "Unable to delete config option");
+      } finally {
+        setWorkingAction("");
+      }
+    }
+
+    return html`
+      <section>
+        <header className="page-head">
+          <div>
+            <p className="page-kicker">Admin</p>
+            <h1 className="page-title">Config Catalog</h1>
+            <p className="page-description">
+              Editable dropdown sources for job creation, Theme Factory, and operator workflows.
+            </p>
+          </div>
+          <div className="inline-actions">
+            <button type="button" className="button primary" onClick=${() => openOptionEditor()}>Add Option</button>
+            <button type="button" className="button" onClick=${loadOptionCatalog} disabled=${loading}>Refresh</button>
+          </div>
+        </header>
+
+        ${error ? html`<div className="status-panel error">${error}</div>` : null}
+        ${statusMessage ? html`<p className="status-line">${statusMessage}</p>` : null}
+        ${optionCatalog.source === "seed"
+          ? html`<div className="status-panel warning">Config API is serving seed defaults. Editing requires the database-backed catalog table.</div>`
+          : null}
+        ${loading ? html`<div className="status-panel warning">Loading config catalog...</div>` : null}
+
+        <section className="cards-grid">
+          <article className="summary-card">
+            <p className="summary-label">Categories</p>
+            <p className="summary-value">${categorySections.length}</p>
+          </article>
+          <article className="summary-card">
+            <p className="summary-label">Total Options</p>
+            <p className="summary-value">${totalOptions}</p>
+          </article>
+          <article className="summary-card">
+            <p className="summary-label">Active Options</p>
+            <p className="summary-value">${activeOptions}</p>
+          </article>
+          <article className="summary-card">
+            <p className="summary-label">Defaults</p>
+            <p className="summary-value">${defaultOptions}</p>
+          </article>
+        </section>
+
+        ${categorySections.map((section) => html`
+          <section className="section-panel" key=${section.value}>
+            <div className="section-head">
+              <div>
+                <h2 className="section-title">${section.label}</h2>
+                <p className="section-copy">${section.description}</p>
+              </div>
+              <button type="button" className="button primary" onClick=${() => openOptionEditor(null, section.value)}>
+                Add ${section.label}
+              </button>
+            </div>
+            ${section.items.length === 0
+              ? html`<p className="empty-state">No options configured for ${section.label.toLowerCase()}.</p>`
+              : html`
+                  <div className="table-wrap">
+                    <table className="console-table">
+                      <thead>
+                        <tr>
+                          <th>label</th>
+                          <th>value</th>
+                          <th>key</th>
+                          <th>default</th>
+                          <th>status</th>
+                          <th>sort</th>
+                          <th>actions</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        ${section.items.map((option) => html`
+                          <tr key=${option.id}>
+                            <td>
+                              <strong>${option.label}</strong>
+                              ${option.description ? html`<p className="section-copy">${option.description}</p>` : null}
+                            </td>
+                            <td><code>${option.option_value}</code></td>
+                            <td><code>${option.option_key}</code></td>
+                            <td><${StatusBadge} value=${option.is_default ? "default" : "optional"} /></td>
+                            <td><${StatusBadge} value=${option.is_active ? "active" : "inactive"} /></td>
+                            <td>${option.sort_order}</td>
+                            <td>
+                              <div className="inline-actions">
+                                <button type="button" className="button" onClick=${() => openOptionEditor(option)}>Edit</button>
+                                <button type="button" className="button danger" onClick=${() => handleDeleteOption(option)} disabled=${workingAction === `delete-option:${option.id}`}>
+                                  ${workingAction === `delete-option:${option.id}` ? "Working..." : "Deactivate"}
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        `)}
+                      </tbody>
+                    </table>
+                  </div>
+                `}
+          </section>
+        `)}
+
+        ${editorOpen
+          ? html`
+              <div className="modal-backdrop" onClick=${() => setEditorOpen(false)}>
+                <section className="modal modal-wide" onClick=${(event) => event.stopPropagation()}>
+                  <h2 className="section-title">${editingOptionId ? "Edit Config Option" : "Add Config Option"}</h2>
+                  <form onSubmit=${handleSaveOption}>
+                    <div className="form-grid">
+                      <div className="form-field">
+                        <label htmlFor="configCategory">Category</label>
+                        <select id="configCategory" value=${optionForm.category} onChange=${(event) => setOptionForm((current) => ({ ...current, category: event.target.value }))} required>
+                          ${OPERATOR_CONFIG_CATEGORIES.map((category) => html`<option key=${category.value} value=${category.value}>${category.label}</option>`)}
+                        </select>
+                      </div>
+                      <div className="form-field">
+                        <label htmlFor="configLabel">Label</label>
+                        <input
+                          id="configLabel"
+                          value=${optionForm.label}
+                          onInput=${(event) => setOptionForm((current) => ({
+                            ...current,
+                            label: event.target.value,
+                            option_key: current.option_key || makeOptionKey(event.target.value),
+                          }))}
+                          required
+                        />
+                      </div>
+                      <div className="form-field">
+                        <label htmlFor="configValue">Value</label>
+                        <input
+                          id="configValue"
+                          value=${optionForm.option_value}
+                          onInput=${(event) => setOptionForm((current) => ({
+                            ...current,
+                            option_value: event.target.value,
+                            option_key: current.option_key || makeOptionKey(event.target.value),
+                          }))}
+                          required
+                        />
+                      </div>
+                      <div className="form-field">
+                        <label htmlFor="configKey">Option Key</label>
+                        <input
+                          id="configKey"
+                          value=${optionForm.option_key}
+                          onInput=${(event) => setOptionForm((current) => ({ ...current, option_key: makeOptionKey(event.target.value) }))}
+                          required
+                        />
+                      </div>
+                      <div className="form-field">
+                        <label htmlFor="configSortOrder">Sort Order</label>
+                        <input id="configSortOrder" type="number" value=${optionForm.sort_order} onInput=${(event) => setOptionForm((current) => ({ ...current, sort_order: event.target.value }))} />
+                      </div>
+                      <div className="form-field full">
+                        <label htmlFor="configDescription">Description</label>
+                        <textarea id="configDescription" rows="4" value=${optionForm.description} onInput=${(event) => setOptionForm((current) => ({ ...current, description: event.target.value }))}></textarea>
+                      </div>
+                      <label className="checkbox-field">
+                        <input type="checkbox" checked=${optionForm.is_active} onChange=${(event) => setOptionForm((current) => ({ ...current, is_active: event.target.checked }))} />
+                        <span>Active option</span>
+                      </label>
+                      <label className="checkbox-field">
+                        <input type="checkbox" checked=${optionForm.is_default} onChange=${(event) => setOptionForm((current) => ({ ...current, is_default: event.target.checked }))} />
+                        <span>Default for this category</span>
+                      </label>
+                    </div>
+                    <div className="inline-actions" style=${{ marginTop: "12px" }}>
+                      <button type="submit" className="button primary" disabled=${workingAction === "save-option"}>
+                        ${workingAction === "save-option" ? "Saving..." : "Save Option"}
+                      </button>
+                      <button type="button" className="button" onClick=${() => setEditorOpen(false)}>Cancel</button>
                     </div>
                   </form>
                 </section>
@@ -3824,6 +4351,7 @@ const compareLabUrl = resolveAssetUrl("/static/compare.html");
                   `)}
                 </div>
               `}
+          <${QualitySummaryPanel} qualityResult=${job.quality_result} title="Stage 4 Quality" compact=${true} />
         </section>
       `;
     }
@@ -4066,6 +4594,7 @@ const compareLabUrl = resolveAssetUrl("/static/compare.html");
     const navItems = [
       { to: "/", label: "Home", icon: "home", end: true },
       { to: "/themes", label: "Theme Factory", icon: "themes" },
+      { to: "/config", label: "Config Catalog", icon: "config" },
       { to: "/studio", label: "Studio", icon: "studio" },
       { to: "/compare", label: "Compare Lab", icon: "compare" },
       { to: "/jobs", label: "Jobs", icon: "jobs" },
@@ -4139,6 +4668,7 @@ const compareLabUrl = resolveAssetUrl("/static/compare.html");
           <${Routes}>
             <${Route} path="/" element=${html`<${WorkflowConsolePage} />`} />
             <${Route} path="/themes" element=${html`<${ThemeFactoryPage} />`} />
+            <${Route} path="/config" element=${html`<${ConfigCatalogPage} />`} />
             <${Route} path="/studio" element=${html`<${StudioPage} />`} />
             <${Route} path="/studio/:jobId" element=${html`<${StudioPage} />`} />
             <${Route} path="/compare" element=${html`<${CompareLabPage} />`} />
